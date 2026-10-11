@@ -1,0 +1,10 @@
+{
+  "name": "food-cost",
+  "private": true,
+  "type": "module",
+  "description": "เว็บแอปบน iPhone คิดต้นทุนอาหารต่อจาน และกำไรหลังหัก GP ของ Grab / LINE MAN",
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "start": "python3 -m http.server 8080"
+  }
+}

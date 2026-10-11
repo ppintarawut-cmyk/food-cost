@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>ต้นทุนอาหาร</title>
+  <meta name="description" content="คิดต้นทุนอาหารต่อจาน และกำไรหลังหัก GP ของ Grab / LINE MAN">
+  <meta name="theme-color" content="#f6f3ee" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#1c1a17" media="(prefers-color-scheme: dark)">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="ต้นทุนอาหาร">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png" type="image/png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <button id="back" class="back" hidden aria-label="กลับ">‹ กลับ</button>
+    <h1 id="title">เมนู</h1>
+  </header>
+
+  <main id="view"></main>
+
+  <nav id="tabs" class="tabs">
+    <button data-tab="menus"><span class="ico">🍛</span>เมนู</button>
+    <button data-tab="purchases"><span class="ico">🧾</span>ซื้อของ</button>
+    <button data-tab="ingredients"><span class="ico">🥬</span>วัตถุดิบ</button>
+    <button data-tab="settings"><span class="ico">⚙️</span>ตั้งค่า</button>
+  </nav>
+
+  <input type="file" id="receipt-input" accept="image/*" hidden>
+  <input type="file" id="restore-input" accept=".json,application/json" hidden>
+
+  <div id="loading" class="loading" hidden>
+    <div class="spinner"></div>
+    <p>AI กำลังอ่านใบเสร็จ…<br><span class="note">ใช้เวลาประมาณ 10–30 วินาที</span></p>
+  </div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
