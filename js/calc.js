@@ -154,3 +154,124 @@ export function formatQty(qty, unit) {
   if (unit === 'ml' && qty >= 1000) return `${num(qty / 1000)} ลิตร`;
   return `${num(qty)} ${BASE_UNITS[unit] ?? ''}`.trim();
 }
+
+// ---------- แดชบอร์ดและตาราง ----------
+
+/** จำนวนวันในเดือน 'YYYY-MM' */
+export function daysInMonth(month) {
+  const [y, m] = month.split('-').map(Number);
+  return new Date(y, m, 0).getDate();
+}
+
+/** ค่าซื้อรายวันของเดือน ครบทุกวัน (วันที่ไม่ได้ซื้อ = 0) */
+export function dailyTotals(purchases, month) {
+  const totals = Array.from({ length: daysInMonth(month) }, (_, i) => ({ day: i + 1, total: 0 }));
+  for (const p of purchases) {
+    if (!p.date.startsWith(month)) continue;
+    totals[Number(p.date.slice(8, 10)) - 1].total += p.price;
+  }
+  return totals;
+}
+
+/** ค่าซื้อเดือนนี้เทียบเดือนก่อน: change เป็นสัดส่วน (0.1 = +10%) หรือ null ถ้าเดือนก่อนไม่มีข้อมูล */
+export function monthComparison(purchases, month, previousMonth) {
+  const current = purchaseSummary(purchases, month).total;
+  const previous = purchaseSummary(purchases, previousMonth).total;
+  return { current, previous, change: previous > 0 ? (current - previous) / previous : null };
+}
+
+/** วัตถุดิบที่จ่ายเงินเยอะสุดในเดือน share = สัดส่วนของค่าซื้อทั้งเดือน */
+export function topIngredients(state, month, limit = 5) {
+  const byIng = new Map();
+  let total = 0;
+  for (const p of state.purchases) {
+    if (!p.date.startsWith(month)) continue;
+    byIng.set(p.ingredientId, (byIng.get(p.ingredientId) || 0) + p.price);
+    total += p.price;
+  }
+  return [...byIng.entries()]
+    .map(([id, spent]) => ({
+      ingredient: state.ingredients.find((i) => i.id === id) || { id, name: '(วัตถุดิบที่ถูกลบ)', unit: 'pc' },
+      total: spent,
+      share: total > 0 ? spent / total : 0,
+    }))
+    .sort((a, b) => b.total - a.total)
+    .slice(0, limit);
+}
+
+/**
+ * ราคาต่อหน่วยครั้งล่าสุด เทียบกับครั้งก่อนหน้า ของทุกวัตถุดิบที่ราคาเปลี่ยน
+ * เรียงจากขึ้นราคามากสุด ไปลดราคามากสุด
+ */
+export function priceChanges(state) {
+  const changes = [];
+  for (const ing of state.ingredients) {
+    const history = state.purchases
+      .filter((p) => p.ingredientId === ing.id && p.qty > 0)
+      .sort((a, b) => (a.date === b.date ? b.createdAt - a.createdAt : a.date < b.date ? 1 : -1));
+    if (history.length < 2) continue;
+    const [latest, before] = history;
+    const now = latest.price / latest.qty;
+    const prev = before.price / before.qty;
+    if (prev <= 0 || Math.abs(now - prev) < 1e-9) continue;
+    changes.push({ ingredient: ing, previous: prev, current: now, change: (now - prev) / prev, date: latest.date });
+  }
+  return changes.sort((a, b) => b.change - a.change);
+}
+
+/** ทุกคู่ เมนู × ช่องทางขาย ที่ตั้งราคาไว้ เรียงจากกำไรต่อจานน้อยสุด */
+export function lowestProfits(state, limit = 5) {
+  const rows = [];
+  for (const menu of state.menus) {
+    for (const p of profitByChannel(state, menu)) {
+      if (p.set) rows.push({ menu, channel: p.label, profit: p.profit, price: p.price, incomplete: p.cost.missing.length > 0 });
+    }
+  }
+  return rows.sort((a, b) => a.profit - b.profit).slice(0, limit);
+}
+
+/** แถวของตารางรายการซื้อ กรองตามเดือน ('' = ทุกเดือน) และคำค้นชื่อวัตถุดิบ เรียงวันล่าสุดก่อน */
+export function purchaseRows(state, month, query = '') {
+  const q = query.trim().toLowerCase();
+  return state.purchases
+    .filter((p) => !month || p.date.startsWith(month))
+    .map((p) => {
+      const ing = state.ingredients.find((i) => i.id === p.ingredientId);
+      return {
+        id: p.id,
+        date: p.date,
+        name: ing ? ing.name : '(วัตถุดิบที่ถูกลบ)',
+        unit: ing ? ing.unit : 'pc',
+        qty: p.qty,
+        price: p.price,
+        unitPrice: p.qty > 0 ? p.price / p.qty : null,
+        createdAt: p.createdAt,
+      };
+    })
+    .filter((r) => !q || r.name.toLowerCase().includes(q))
+    .sort((a, b) => (a.date === b.date ? b.createdAt - a.createdAt : a.date < b.date ? 1 : -1));
+}
+
+/** ราคาต่อหน่วยแบบที่คนอ่านคุ้น: กรัม/มล. คิดต่อ กก./ลิตร */
+export function displayUnitPrice(unitPrice, unit) {
+  if (unitPrice === null) return { value: null, label: '' };
+  if (unit === 'g') return { value: unitPrice * 1000, label: 'บาท/กก.' };
+  if (unit === 'ml') return { value: unitPrice * 1000, label: 'บาท/ลิตร' };
+  return { value: unitPrice, label: 'บาท/ชิ้น' };
+}
+
+/** ไฟล์ CSV ของตาราง มี BOM นำหน้าเพื่อให้ Excel อ่านภาษาไทยถูก */
+export function toCsv(rows) {
+  const cell = (v) => {
+    const s = String(v ?? '');
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const header = ['วันที่', 'วัตถุดิบ', 'จำนวน', 'หน่วย', 'ราคา (บาท)', 'ราคาต่อหน่วย', 'หน่วยราคา'];
+  const lines = rows.map((r) => {
+    const up = displayUnitPrice(r.unitPrice, r.unit);
+    return [r.date, r.name, r.qty, BASE_UNITS[r.unit], r.price.toFixed(2), up.value === null ? '' : up.value.toFixed(2), up.label]
+      .map(cell)
+      .join(',');
+  });
+  return '﻿' + [header.join(','), ...lines].join('\r\n') + '\r\n';
+}
