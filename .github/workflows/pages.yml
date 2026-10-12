@@ -35,9 +35,9 @@ jobs:
         run: |
           mkdir _site
           cp -r index.html manifest.webmanifest sw.js css js icons _site/
+      # ต้องเปิด Pages ครั้งแรกเองที่ Settings → Pages → Source: GitHub Actions
+      # (สิทธิ์ของ workflow สร้างหน้า Pages ใหม่เองไม่ได้)
       - uses: actions/configure-pages@v5
-        with:
-          enablement: true
       - uses: actions/upload-pages-artifact@v3
       - id: deployment
         uses: actions/deploy-pages@v4
