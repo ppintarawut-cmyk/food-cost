@@ -1,4 +1,4 @@
-// หน้าจอทั้งหมดของโปรแกรม: เมนู, ซื้อของ, วัตถุดิบ, ตั้งค่า
+// หน้าจอทั้งหมดของโปรแกรม: ภาพรวม, เมนู, ซื้อของ (รายวัน/ตาราง), วัตถุดิบ, ตั้งค่า
 // วาดหน้าจอใหม่ทั้งหน้าเมื่อข้อมูลเปลี่ยน ยกเว้นตอนกำลังพิมพ์ จะอัปเดตเฉพาะตัวเลขที่คำนวณ เพื่อไม่ให้คีย์บอร์ดหลุด
 
 import {
@@ -6,14 +6,22 @@ import {
   CHANNELS,
   INPUT_UNITS,
   baht,
+  dailyTotals,
+  displayUnitPrice,
   formatQty,
   inputUnitsFor,
   latestPurchase,
   lineCost,
+  lowestProfits,
   menuCost,
+  monthComparison,
   num,
+  priceChanges,
   profitByChannel,
+  purchaseRows,
   purchaseSummary,
+  toCsv,
+  topIngredients,
   unitPrice,
 } from './calc.js';
 import {
@@ -41,6 +49,7 @@ let state = load(storage);
 let apiKey = loadApiKey(storage);
 
 const TAB_TITLES = {
+  dashboard: 'ภาพรวม',
   menus: 'เมนู',
   purchases: 'ซื้อของ',
   ingredients: 'วัตถุดิบ',
@@ -48,10 +57,13 @@ const TAB_TITLES = {
 };
 
 const ui = {
-  tab: 'menus',
+  tab: 'dashboard',
   screen: null, // { type: 'menu' | 'purchase' | 'review' | 'ingredient', ... }
   month: today().slice(0, 7),
   problems: {},
+  purchaseView: 'days', // 'days' | 'table'
+  tableQuery: '',
+  tableAllMonths: false,
 };
 
 const view = document.getElementById('view');
@@ -107,6 +119,30 @@ function unitPriceLabel(ing) {
   if (ing.unit === 'g') return `${baht(up * 1000)} บาท/กก.`;
   if (ing.unit === 'ml') return `${baht(up * 1000)} บาท/ลิตร`;
   return `${baht(up)} บาท/ชิ้น`;
+}
+
+/**
+ * ส่งไฟล์ออกจากแอป: เปิดหน้าแชร์ของ iPhone (เช่น ส่งเข้า LINE) ถ้าทำไม่ได้ให้ดาวน์โหลดแทน
+ * คืน true ถ้าส่งสำเร็จ, false ถ้าผู้ใช้ยกเลิกหรือส่งไม่ได้
+ */
+async function shareFile(file, title) {
+  try {
+    if (navigator.canShare?.({ files: [file] })) {
+      await navigator.share({ files: [file], title });
+    } else {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(file);
+      a.download = file.name;
+      document.body.append(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    }
+    return true;
+  } catch (err) {
+    if (err?.name !== 'AbortError') toast('ส่งไฟล์ไม่สำเร็จ', true); // AbortError = ผู้ใช้กดยกเลิกหน้าแชร์
+    return false;
+  }
 }
 
 function persist() {
@@ -315,12 +351,201 @@ function renderPurchases() {
       <button class="btn primary" data-action="scan">📷 ถ่ายใบเสร็จ</button>
       <button class="btn" data-action="new-purchase">✏️ พิมพ์เอง</button>
     </div>
-    <div class="month-bar">
-      <button class="icon-btn" data-action="month" data-delta="-1" aria-label="เดือนก่อน">‹</button>
-      <div class="center"><b>${monthLabel(ui.month)}</b><div class="note">ค่าซื้อทั้งเดือน ${baht(summary.total)} บาท</div></div>
-      <button class="icon-btn" data-action="month" data-delta="1" aria-label="เดือนถัดไป">›</button>
+    ${monthBar(`ค่าซื้อทั้งเดือน ${baht(summary.total)} บาท`)}
+    <div class="segmented" role="tablist">
+      <button role="tab" data-action="purchase-view" data-view="days" class="${ui.purchaseView === 'days' ? 'active' : ''}">รายวัน</button>
+      <button role="tab" data-action="purchase-view" data-view="table" class="${ui.purchaseView === 'table' ? 'active' : ''}">ตาราง</button>
     </div>
-    ${days || '<div class="empty">เดือนนี้ยังไม่มีรายการซื้อ</div>'}`;
+    ${ui.purchaseView === 'table' ? renderPurchaseTable() : days || '<div class="empty">เดือนนี้ยังไม่มีรายการซื้อ</div>'}`;
+}
+
+function monthBar(subtitle) {
+  return `<div class="month-bar">
+      <button class="icon-btn" data-action="month" data-delta="-1" aria-label="เดือนก่อน">‹</button>
+      <div class="center"><b>${monthLabel(ui.month)}</b><div class="note">${subtitle}</div></div>
+      <button class="icon-btn" data-action="month" data-delta="1" aria-label="เดือนถัดไป">›</button>
+    </div>`;
+}
+
+function tableRows() {
+  return purchaseRows(state, ui.tableAllMonths ? '' : ui.month, ui.tableQuery);
+}
+
+function renderPurchaseTable() {
+  return `<div class="table-tools">
+      <input type="search" value="${esc(ui.tableQuery)}" data-input="table-query" placeholder="ค้นหาวัตถุดิบ" aria-label="ค้นหาวัตถุดิบ">
+      <label class="toggle compact"><input type="checkbox" ${ui.tableAllMonths ? 'checked' : ''} data-change="table-all"><span>ทุกเดือน</span></label>
+    </div>
+    <div data-live="table">${renderTableBody(tableRows())}</div>
+    <button class="btn block" data-action="export-csv">ส่งออกเป็นไฟล์ Excel (CSV)</button>
+    <div class="note center">ส่งออกตามที่แสดงในตาราง · แตะแถวเพื่อแก้ไข</div>`;
+}
+
+function renderTableBody(rows) {
+  if (!rows.length) return '<div class="empty">ไม่มีรายการ</div>';
+  const total = rows.reduce((s, r) => s + r.price, 0);
+  // หน้าจอมือถือแคบ: ใส่จำนวนไว้ใต้ชื่อ และราคาต่อหน่วยไว้ใต้ราคา แทนการแยกคอลัมน์
+  return `<div class="table-wrap card">
+    <table class="data">
+      <thead><tr><th>วันที่</th><th>วัตถุดิบ · จำนวน</th><th class="num">ราคา (บาท)</th></tr></thead>
+      <tbody>
+        ${rows
+          .map((r) => {
+            const up = displayUnitPrice(r.unitPrice, r.unit);
+            return `<tr data-action="open-purchase" data-id="${r.id}">
+              <td class="nowrap">${shortDate(r.date)}</td>
+              <td>${esc(r.name)}<div class="note">${formatQty(r.qty, r.unit)}</div></td>
+              <td class="num"><b>${baht(r.price)}</b>${up.value === null ? '' : `<div class="note nowrap">${baht(up.value)} ${up.label}</div>`}</td>
+            </tr>`;
+          })
+          .join('')}
+      </tbody>
+      <tfoot><tr><td colspan="2">รวม ${rows.length} รายการ</td><td class="num">${baht(total)}</td></tr></tfoot>
+    </table>
+  </div>`;
+}
+
+function shortDate(date) {
+  const [y, m, d] = date.split('-').map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: ui.tableAllMonths ? '2-digit' : undefined });
+}
+
+// ---------- แท็บภาพรวม ----------
+
+function renderDashboard() {
+  if (!state.purchases.length && !state.menus.length) {
+    return `${banners()}<div class="empty">ยังไม่มีข้อมูล<br><br>
+      เริ่มจากบันทึกการซื้อวัตถุดิบในแท็บ <b>ซื้อของ</b><br>แล้วสร้างเมนูในแท็บ <b>เมนู</b><br>
+      หน้านี้จะสรุปให้เห็นภาพรวมเอง</div>`;
+  }
+  const cmp = monthComparison(state.purchases, ui.month, shiftMonth(ui.month, -1));
+  let compare = 'เดือนก่อนไม่มีข้อมูลให้เทียบ';
+  if (cmp.change !== null) {
+    const pct = Math.round(Math.abs(cmp.change) * 100);
+    compare = cmp.change === 0
+      ? `เท่ากับเดือนก่อน (${baht(cmp.previous)} บาท)`
+      : `${cmp.change > 0 ? '▲ มากกว่า' : '▼ น้อยกว่า'}เดือนก่อน ${pct}% (เดือนก่อน ${baht(cmp.previous)} บาท)`;
+  }
+
+  return `${banners()}
+    ${monthBar('ภาพรวมของเดือน')}
+    <div class="card kpi">
+      <div class="note">ค่าซื้อวัตถุดิบเดือนนี้</div>
+      <div class="kpi-value">${baht(cmp.current)} <span class="kpi-unit">บาท</span></div>
+      <div class="note">${compare}</div>
+    </div>
+
+    <h2>ค่าซื้อรายวัน</h2>
+    <div class="card">${renderDailyChart(dailyTotals(state.purchases, ui.month))}</div>
+
+    <h2>วัตถุดิบที่จ่ายเยอะสุด</h2>
+    <div class="card">${renderTopIngredients(topIngredients(state, ui.month))}</div>
+
+    <h2>ราคาวัตถุดิบที่เปลี่ยน</h2>
+    <div class="card">${renderPriceChanges(priceChanges(state))}</div>
+
+    <h2>เมนูที่กำไรต่อจานน้อยสุด</h2>
+    <div class="card">${renderLowestProfits(lowestProfits(state))}</div>`;
+}
+
+/** ปัดเพดานแกนให้เป็นเลขกลม ๆ เช่น 437 → 500, 1,820 → 2,000 */
+function niceMax(v) {
+  if (v <= 0) return 100;
+  const mag = 10 ** Math.floor(Math.log10(v));
+  for (const step of [1, 2, 2.5, 5, 10]) if (step * mag >= v) return step * mag;
+  return 10 * mag;
+}
+
+function compact(n) {
+  return n >= 1000 ? `${num(n / 1000)}K` : num(n);
+}
+
+function renderDailyChart(days) {
+  const total = days.reduce((s, d) => s + d.total, 0);
+  if (total === 0) return '<div class="empty small">เดือนนี้ยังไม่มีรายการซื้อ</div>';
+  const W = 320, H = 160, left = 34, right = 6, top = 10, bottom = 22;
+  const plotW = W - left - right, plotH = H - top - bottom;
+  const max = niceMax(Math.max(...days.map((d) => d.total)));
+  const slot = plotW / days.length;
+  const barW = Math.min(24, slot - 2);
+  const y = (v) => top + plotH - (v / max) * plotH;
+  const ticks = [0, max / 2, max];
+  const grid = ticks
+    .map((t) => `<line x1="${left}" x2="${W - right}" y1="${y(t)}" y2="${y(t)}" class="grid"/>
+      <text x="${left - 6}" y="${y(t) + 4}" class="axis" text-anchor="end">${compact(t)}</text>`)
+    .join('');
+  const labelDays = new Set([1, 5, 10, 15, 20, 25, days.length]);
+  const bars = days
+    .map((d, i) => {
+      const x = left + i * slot + (slot - barW) / 2;
+      const h = (d.total / max) * plotH;
+      const r = Math.min(4, barW / 2, h);
+      const base = top + plotH;
+      const bar = h > 0
+        ? `<path class="bar" d="M${x},${base} V${base - h + r} Q${x},${base - h} ${x + r},${base - h} H${x + barW - r} Q${x + barW},${base - h} ${x + barW},${base - h + r} V${base} Z"/>`
+        : '';
+      const label = labelDays.has(d.day) ? `<text x="${x + barW / 2}" y="${H - 6}" class="axis" text-anchor="middle">${d.day}</text>` : '';
+      // พื้นที่แตะกว้างเต็มช่องและสูงเต็มกราฟ แตะง่ายกว่าตัวแท่ง
+      return `<g class="day-col" data-day="${d.day}" data-total="${d.total}">
+        <rect class="hit" x="${left + i * slot}" y="${top}" width="${slot}" height="${plotH}"/>${bar}</g>${label}`;
+    })
+    .join('');
+  const busiest = days.reduce((a, b) => (b.total > a.total ? b : a));
+  return `<div class="chart-readout" data-live="chart-readout">${readout(busiest, true)}</div>
+    <svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="กราฟค่าซื้อรายวัน เดือน${monthLabel(ui.month)}">
+      ${grid}${bars}
+      <line x1="${left}" x2="${W - right}" y1="${top + plotH}" y2="${top + plotH}" class="baseline"/>
+    </svg>
+    <div class="note">แตะแท่งกราฟเพื่อดูยอดของวันนั้น · ดูทุกรายการได้ที่ ซื้อของ → ตาราง</div>`;
+}
+
+function readout(d, isBusiest = false) {
+  const [y, m] = ui.month.split('-').map(Number);
+  const label = new Date(y, m - 1, d.day).toLocaleDateString('th-TH', { weekday: 'short', day: 'numeric', month: 'short' });
+  return `<b>${label}</b> ${baht(d.total)} บาท${isBusiest ? ' <span class="note">(วันที่ซื้อเยอะสุด)</span>' : ''}`;
+}
+
+function renderTopIngredients(items) {
+  if (!items.length) return '<div class="empty small">เดือนนี้ยังไม่มีรายการซื้อ</div>';
+  const maxShare = items[0].share;
+  return items
+    .map(
+      (t) => `<div class="hbar">
+        <div class="row"><span>${esc(t.ingredient.name)}</span><span><b>${baht(t.total)}</b> <span class="note">${Math.round(t.share * 100)}%</span></span></div>
+        <div class="hbar-track"><div class="hbar-fill" style="width:${(t.share / maxShare) * 100}%"></div></div>
+      </div>`
+    )
+    .join('');
+}
+
+function renderPriceChanges(changes) {
+  if (!changes.length) return '<div class="empty small">ยังไม่มีวัตถุดิบที่ราคาเปลี่ยน<br>(ต้องซื้อของเดิมอย่างน้อย 2 ครั้ง)</div>';
+  return changes
+    .slice(0, 8)
+    .map((c) => {
+      const before = displayUnitPrice(c.previous, c.ingredient.unit);
+      const now = displayUnitPrice(c.current, c.ingredient.unit);
+      const up = c.change > 0;
+      return `<div class="list-item static">
+        <span class="grow">${esc(c.ingredient.name)}
+          <span class="note">${baht(before.value)} → ${baht(now.value)} ${now.label} · ซื้อล่าสุด ${dayLabel(c.date)}</span></span>
+        <b class="nowrap ${up ? 'loss' : 'gain'}">${up ? '▲ ขึ้น' : '▼ ลง'} ${Math.round(Math.abs(c.change) * 100)}%</b>
+      </div>`;
+    })
+    .join('');
+}
+
+function renderLowestProfits(rows) {
+  if (!rows.length) return '<div class="empty small">ยังไม่มีเมนูที่ตั้งราคาขาย</div>';
+  return rows
+    .map(
+      (r) => `<button class="list-item" data-action="open-menu" data-id="${r.menu.id}">
+        <span class="grow">${esc(r.menu.name || 'เมนูไม่มีชื่อ')}
+          <span class="note">${r.channel} · ขาย ${baht(r.price)} บาท${r.incomplete ? ' · ต้นทุนยังไม่ครบ' : ''}</span></span>
+        <b class="nowrap ${r.profit < 0 ? 'loss' : ''}">${r.profit < 0 ? 'ขาดทุน ' : ''}${baht(r.profit)}</b>
+      </button>`
+    )
+    .join('');
 }
 
 function renderPurchaseForm(form) {
@@ -530,7 +755,13 @@ function render() {
     heading = 'วัตถุดิบ';
     html = renderIngredientDetail(ing);
   } else {
-    html = { menus: renderMenus, purchases: renderPurchases, ingredients: renderIngredients, settings: renderSettings }[ui.tab]();
+    html = {
+      dashboard: renderDashboard,
+      menus: renderMenus,
+      purchases: renderPurchases,
+      ingredients: renderIngredients,
+      settings: renderSettings,
+    }[ui.tab]();
   }
   title.textContent = heading;
   backBtn.hidden = !s;
@@ -564,7 +795,10 @@ function closeScreen() {
 /** อัปเดตเฉพาะตัวเลขที่คำนวณ ระหว่างที่ผู้ใช้กำลังพิมพ์ */
 function refreshLive() {
   const s = ui.screen;
-  if (s?.type === 'menu') {
+  if (!s && ui.tab === 'purchases') {
+    const el = view.querySelector('[data-live="table"]');
+    if (el) el.innerHTML = renderTableBody(tableRows());
+  } else if (s?.type === 'menu') {
     const menu = state.menus.find((m) => m.id === s.id);
     const summary = view.querySelector('[data-live="menu-summary"]');
     if (summary) summary.innerHTML = renderMenuSummary(menu);
@@ -638,6 +872,17 @@ const actions = {
   month(el) {
     ui.month = shiftMonth(ui.month, Number(el.dataset.delta));
     render();
+  },
+  'purchase-view'(el) {
+    ui.purchaseView = el.dataset.view;
+    render();
+  },
+  async 'export-csv'() {
+    const rows = tableRows();
+    if (!rows.length) return toast('ไม่มีรายการให้ส่งออก', true);
+    const name = `food-cost-purchases-${ui.tableAllMonths ? 'all' : ui.month}.csv`;
+    const file = new File([toCsv(rows)], name, { type: 'text/csv' });
+    if (await shareFile(file, 'ตารางรายการซื้อ')) toast('ส่งออกแล้ว');
   },
   'new-purchase'() {
     openScreen({
@@ -753,20 +998,7 @@ const actions = {
   async backup() {
     const now = new Date();
     const file = new File([makeBackup(state, now)], backupFileName(now), { type: 'application/json' });
-    try {
-      if (navigator.canShare?.({ files: [file] })) {
-        await navigator.share({ files: [file], title: 'ไฟล์สำรอง food-cost' });
-      } else {
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(file);
-        a.download = file.name;
-        a.click();
-        setTimeout(() => URL.revokeObjectURL(a.href), 10000);
-      }
-    } catch (err) {
-      if (err?.name === 'AbortError') return; // ผู้ใช้กดยกเลิกหน้าแชร์
-      return toast('ส่งไฟล์สำรองไม่สำเร็จ', true);
-    }
+    if (!(await shareFile(file, 'ไฟล์สำรอง food-cost'))) return;
     state.settings.lastBackupAt = now.getTime();
     persist();
     render();
@@ -795,6 +1027,9 @@ const actions = {
 
 // การพิมพ์: แก้ข้อมูลแล้วอัปเดตเฉพาะตัวเลข
 const inputs = {
+  'table-query'(el) {
+    ui.tableQuery = el.value;
+  },
   'menu-name'(el) {
     currentMenu().name = el.value;
   },
@@ -846,6 +1081,9 @@ const settingInputs = { 'set-gpGrab': 'gpGrab', 'set-gpLineman': 'gpLineman', 's
 
 // การเลือกจากรายการ: เปลี่ยนรูปหน้าจอ จึงวาดใหม่ทั้งหน้า
 const changes = {
+  'table-all'(el) {
+    ui.tableAllMonths = el.checked;
+  },
   'line-ingredient'(el) {
     currentMenu().lines[Number(el.dataset.idx)].ingredientId = el.value;
     persist();
@@ -893,6 +1131,18 @@ document.addEventListener('click', (e) => {
   const el = e.target.closest('[data-action]');
   if (el && actions[el.dataset.action]) actions[el.dataset.action](el);
 });
+
+// กราฟค่าซื้อรายวัน: แตะหรือชี้ที่แท่ง แสดงยอดของวันนั้น
+function showDay(e) {
+  const col = e.target.closest?.('.day-col');
+  const out = view.querySelector('[data-live="chart-readout"]');
+  if (!col || !out) return;
+  view.querySelectorAll('.day-col.active').forEach((c) => c.classList.remove('active'));
+  col.classList.add('active');
+  out.innerHTML = readout({ day: Number(col.dataset.day), total: Number(col.dataset.total) });
+}
+view.addEventListener('pointerover', showDay);
+view.addEventListener('click', showDay);
 
 view.addEventListener('input', (e) => {
   const key = e.target.dataset.input;
