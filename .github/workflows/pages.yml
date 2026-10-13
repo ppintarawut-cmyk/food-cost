@@ -34,7 +34,7 @@ jobs:
       - name: Collect site files
         run: |
           mkdir _site
-          cp -r index.html manifest.webmanifest sw.js css js icons _site/
+          cp -r index.html manifest.webmanifest sw.js css js icons fonts _site/
       # ต้องเปิด Pages ครั้งแรกเองที่ Settings → Pages → Source: GitHub Actions
       # (สิทธิ์ของ workflow สร้างหน้า Pages ใหม่เองไม่ได้)
       - uses: actions/configure-pages@v5
