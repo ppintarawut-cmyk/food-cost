@@ -12,6 +12,12 @@ const SHELL = [
   'manifest.webmanifest',
   'icons/apple-touch-icon.png',
   'icons/icon-192.png',
+  'fonts/mali-thai-400-normal.woff2',
+  'fonts/mali-thai-600-normal.woff2',
+  'fonts/mali-thai-700-normal.woff2',
+  'fonts/mali-latin-400-normal.woff2',
+  'fonts/mali-latin-600-normal.woff2',
+  'fonts/mali-latin-700-normal.woff2',
 ];
 
 self.addEventListener('install', (event) => {
